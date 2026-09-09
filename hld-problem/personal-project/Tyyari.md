@@ -9,6 +9,7 @@ Tyyari is a gateway-fronted, domain-split SDE interview-preparation platform. Th
 - [1. First Understand the Project](#1-tyyari--first-understand-the-project)
 - [2. 30-Second Interview Explanation](#2-30-second-interview-explanation)
 - [3. Overall Architecture](#3-overall-architecture)
+- [Data Model — Mongo, Redis, and What Is Not Stored](#data-model--mongo-redis-and-what-is-not-stored)
 - [4. Why Microservices?](#4-why-did-you-choose-microservices)
 - [5. Why Not a Modular Monolith?](#5-but--interviewer-will-attack-your-microservices-decision)
 - [6. API Gateway](#6-api-gateway--understand-it-deeply)
@@ -184,6 +185,76 @@ Think about the architecture in **five layers**.
 ```
 
 The architecture uses **Java 21, Spring Boot, Spring Cloud Gateway, MongoDB, Redis, Kafka, React/Vite, Monaco and Excalidraw**.
+
+---
+
+## Data Model — Mongo, Redis, and What Is Not Stored
+
+Each service owns its own Mongo database. Redis is shared. Kafka, JWT, avatars, mail, and code runs are **not** Mongo collections.
+
+### `auth_db` — Auth `:8081`
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `users` | Identity + billing + 2FA | `email` unique, `passwordHash`, `role` (`USER` / `ADMIN` / `EDITOR`), `status` (`ACTIVE` / `DISABLED` / `DELETING`), `emailVerified`, `provider`, `googleSub`, `githubId`, `premium`, `premiumUntil`, `stripeCustomerId`, `totpSecret`, `totpEnabled`, `createdAt`, `updatedAt` |
+| `refresh_tokens` | Long-lived login (hashed, 7 days) | `userId`, `tokenHash` unique, `expiresAt`, `device`, `revoked`, `createdAt` |
+| `email_verification_tokens` | Verify email | `userId`, `tokenHash`, `expiresAt`, `createdAt` |
+| `password_reset_tokens` | Forgot password | `userId`, `tokenHash`, `expiresAt`, `used`, `createdAt` |
+| `payments` | Stripe Premium | `userId`, `provider`, `providerRef` unique, `status`, `stripeStatus`, `paymentIntentId`, `refundId`, `refundedAt`, `amount`, `currency`, `createdAt`, `updatedAt` |
+
+### `user_db` — User `:8082`
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `profiles` | Onboarding / public profile | `userId` unique, `name`, `avatar`, `bio`, `githubUrl`, `linkedinUrl`, `experience`, `currentRole`, `targetRole`, `skills[]`, `onboarded` |
+| `goals` | Interview targets | `userId` unique, `targetCompanies[]`, `targetRole`, `targetDate`, `dailyGoalMinutes` |
+| `preferences` | UI prefs | `userId` unique, `preferredLanguage`, `theme`, `emailNotifications`, `difficultyPreference` |
+| `submissions` | Practice + OA answers | `uniqueKey` unique, `userId`, `scope` (`PRACTICE` / `OA`), `questionId`, `questionType`, `assessmentSetId`, `language`, `view`, `files[]`, `canvas`, `math`, `quizScore` / `quizTotal` / `quizAnswers`, `submittedAt` |
+
+`files[]` is **embedded** (`id`, `type`, `name`, `content`) — not a separate collection.
+
+### `content_db` — Content `:8083`
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `questions` | All practice types | `type`, `subType`, `title`, `slug` unique, `description`, `difficulty`, `topics[]`, `companies[]`, `tags[]`, `constraints[]`, `examples[]`, `testcases[]`, `starterFiles[]`, `quiz[]`, `hints[]`, `editorial`, `editorialVideoUrl`, `acceptedCode[]`, `reviewStatus`, `reviewer`, `reviewNote`, `scheduledPublishAt`, `isPublished`, `premium`, `createdBy` |
+| `question_sheets` | Curated lists | `slug` unique, `title`, `description`, `type`, `difficulty`, `companies[]`, `questionSlugs[]`, `isPublished` |
+| `assessment_sets` | Timed OA | `slug` unique, `title`, `description`, `durationMinutes`, `difficulty`, `companies[]`, `questionSlugs[]`, `isPublished` |
+| `roadmaps` | Learn paths | `slug` unique, `role`, `title`, `blurb`, `weeks[]`, `isPublished` |
+| `companies` | Catalog | `name`, `slug` unique, `logo`, `active` |
+| `topics` | Catalog | `name`, `slug` unique, `category` |
+| `tags` | Catalog | `name`, `slug` unique |
+| `categories` | Topic groups | `name`, `slug` unique |
+
+**Embedded (not collections):** `examples` (input / output / explanation), `testcases`, `starterFiles`, `quiz` (prompt / options / `answerIndex`), `weeks` → `items` (`kind` / `slug` / `type` / `title`).
+
+### `admin_db` — Admin `:8084`
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `audit_logs` | Staff actions | `actorId`, `action`, `detail`, `createdAt` |
+
+Admin **does not own** users or questions. It reads/writes the others over HTTP (`RestClient`).
+
+### Redis `:6379` — not a table, shared keys
+
+| Key | Writer | TTL / use |
+| --- | --- | --- |
+| `session:block:{userId}` | Auth (gateway reads) | ~15 min — kill JWT after logout / password change / delete |
+| `totp:login:{token}` | Auth | 5 min — 2FA challenge |
+| `rate_limit:{id}` | Gateway | 1 min — API rate limit |
+| `question:{id}` | Content | ~30 min cache |
+| `companies:all`, `topics:*`, `tags:all` | Content | catalog cache |
+
+### What is not a database
+
+| Thing | Where it lives |
+| --- | --- |
+| Access JWT | Client cookie / memory, not stored |
+| Avatars | Disk / volume on user-service |
+| Kafka events | Transient (`user-events`, `content-events`, `audit-events`) |
+| Mail | Mailpit (dev), not persisted in Mongo |
+| Code run | Piston `:2000`, no DB |
 
 ---
 
@@ -411,6 +482,16 @@ Auth service owns:
 
 The project deliberately puts billing here because premium is considered an **account entitlement**.
 
+### `auth_db` collections
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `users` | Identity + billing + 2FA | `email` unique, `passwordHash`, `role` (`USER` / `ADMIN` / `EDITOR`), `status` (`ACTIVE` / `DISABLED` / `DELETING`), `emailVerified`, `provider`, `googleSub`, `githubId`, `premium`, `premiumUntil`, `stripeCustomerId`, `totpSecret`, `totpEnabled`, `createdAt`, `updatedAt` |
+| `refresh_tokens` | Long-lived login (hashed, 7 days) | `userId`, `tokenHash` unique, `expiresAt`, `device`, `revoked`, `createdAt` |
+| `email_verification_tokens` | Verify email | `userId`, `tokenHash`, `expiresAt`, `createdAt` |
+| `password_reset_tokens` | Forgot password | `userId`, `tokenHash`, `expiresAt`, `used`, `createdAt` |
+| `payments` | Stripe Premium | `userId`, `provider`, `providerRef` unique, `status`, `stripeStatus`, `paymentIntentId`, `refundId`, `refundedAt`, `amount`, `currency`, `createdAt`, `updatedAt` |
+
 ---
 
 ## 11. Authentication Flow
@@ -583,6 +664,17 @@ This separation is important:
 
 The project documentation explicitly makes this distinction.
 
+### `user_db` collections
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `profiles` | Onboarding / public profile | `userId` unique, `name`, `avatar`, `bio`, `githubUrl`, `linkedinUrl`, `experience`, `currentRole`, `targetRole`, `skills[]`, `onboarded` |
+| `goals` | Interview targets | `userId` unique, `targetCompanies[]`, `targetRole`, `targetDate`, `dailyGoalMinutes` |
+| `preferences` | UI prefs | `userId` unique, `preferredLanguage`, `theme`, `emailNotifications`, `difficultyPreference` |
+| `submissions` | Practice + OA answers | `uniqueKey` unique, `userId`, `scope` (`PRACTICE` / `OA`), `questionId`, `questionType`, `assessmentSetId`, `language`, `view`, `files[]`, `canvas`, `math`, `quizScore` / `quizTotal` / `quizAnswers`, `submittedAt` |
+
+`files[]` is **embedded** (`id`, `type`, `name`, `content`) — not a separate collection.
+
 ---
 
 ## 18. Content Service
@@ -617,6 +709,21 @@ with type:
 ```
 
 This is called a **discriminator document model**.
+
+### `content_db` collections
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `questions` | All practice types | `type`, `subType`, `title`, `slug` unique, `description`, `difficulty`, `topics[]`, `companies[]`, `tags[]`, `constraints[]`, `examples[]`, `testcases[]`, `starterFiles[]`, `quiz[]`, `hints[]`, `editorial`, `editorialVideoUrl`, `acceptedCode[]`, `reviewStatus`, `reviewer`, `reviewNote`, `scheduledPublishAt`, `isPublished`, `premium`, `createdBy` |
+| `question_sheets` | Curated lists | `slug` unique, `title`, `description`, `type`, `difficulty`, `companies[]`, `questionSlugs[]`, `isPublished` |
+| `assessment_sets` | Timed OA | `slug` unique, `title`, `description`, `durationMinutes`, `difficulty`, `companies[]`, `questionSlugs[]`, `isPublished` |
+| `roadmaps` | Learn paths | `slug` unique, `role`, `title`, `blurb`, `weeks[]`, `isPublished` |
+| `companies` | Catalog | `name`, `slug` unique, `logo`, `active` |
+| `topics` | Catalog | `name`, `slug` unique, `category` |
+| `tags` | Catalog | `name`, `slug` unique |
+| `categories` | Topic groups | `name`, `slug` unique |
+
+**Embedded (not collections):** `examples` (input / output / explanation), `testcases`, `starterFiles`, `quiz` (prompt / options / `answerIndex`), `weeks` → `items` (`kind` / `slug` / `type` / `title`).
 
 ---
 
@@ -689,14 +796,15 @@ Your Redis is **not** your primary database.
 
 It is used for:
 
-| Use | Key |
-| --- | --- |
-| 1. Rate limiting | `rate_limit:{id}` |
-| 2. Session blocking | `session:block:{userId}` |
-| 3. Question caching | `question:{id}` |
-| 4. Catalog caching | companies, topics, tags |
+| Key | Writer | TTL / use |
+| --- | --- | --- |
+| `session:block:{userId}` | Auth (gateway reads) | ~15 min — kill JWT after logout / password change / delete |
+| `totp:login:{token}` | Auth | 5 min — 2FA challenge |
+| `rate_limit:{id}` | Gateway | 1 min — API rate limit |
+| `question:{id}` | Content | ~30 min cache |
+| `companies:all`, `topics:*`, `tags:all` | Content | catalog cache |
 
-The architecture explicitly lists these uses.
+The architecture explicitly lists these uses. Redis is **cache-aside**, not the source of truth.
 
 ---
 
@@ -970,6 +1078,14 @@ Admin Service
 Admin service aggregates staff functionality.
 
 The architecture specifically says admin has mainly audit logs of its own and calls other services' internal APIs.
+
+### `admin_db` collections
+
+| Collection | Purpose | Key fields |
+| --- | --- | --- |
+| `audit_logs` | Staff actions | `actorId`, `action`, `detail`, `createdAt` |
+
+Admin **does not own** users or questions. It reads/writes the others over HTTP (`RestClient`).
 
 ---
 
