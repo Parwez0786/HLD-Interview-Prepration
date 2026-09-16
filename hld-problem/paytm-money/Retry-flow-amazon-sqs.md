@@ -2,7 +2,7 @@
 
 ## Resume bullet
 
-> Implemented retry flow via Amazon SQS with configurable delay intervals using Redis to recover 404 failures in Omne’s fund transfer API, ensuring 100% update reliability and improving system consistency.
+> Implemented retry flow via Amazon SQS with configurable delay intervals using Redis to recover 404 failures in Omne’s fund transfer API (FMS → FO → Omne), ensuring 100% update reliability and improving system consistency.
 
 ---
 
@@ -51,45 +51,42 @@
 
 ## 1. First Understand the Business
 
-Let's imagine Paytm Money has an investment transaction.
+Paytm Money fund-transfer work goes through **FMS** and **FO**, then to a third-party vendor **Omne**.
 
-A user wants to invest **₹5,000**.
+| Component | Meaning |
+| --- | --- |
+| **Omne** | Third-party vendor. Fund-transfer API that FMS/FO call |
+| **FMS** | Fund Management System. This is the system that received Omne's 404s |
+| **FO** | Front Office. API layer in the call path to Omne |
 
-The simplified flow is:
+Call path:
 
 ```text
-User
+FMS (Fund Management System)
   |
   v
-Paytm Money
-  |
-  | Fund Transfer Request
-  v
-Omne
+FO (Front Office) API
   |
   v
-Payment Gateway / Bank
+Omne API  (third-party vendor)
 ```
 
-### What is Omne?
+A user invests **₹5,000**. FMS needs Omne to accept that fund transfer.
 
-**Assumption:** Omne is a downstream financial/payment service used by Paytm Money for processing or coordinating fund-transfer operations.
-
-Your service sends a request to Omne:
+FMS/FO send something like:
 
 ```http
-POST /fund-transfer
+POST /fund-transfer   (Omne API)
 ```
 
 ```json
 {
   "transactionId": "TX123",
-  "amount": 5000,
-  "accountId": "ACC456"
+  "amount": 5000
 }
 ```
 
-Omne processes the request and returns a response.
+Omne processes the request and returns a response back toward FMS.
 
 ---
 
@@ -98,36 +95,38 @@ Omne processes the request and returns a response.
 **Normally:**
 
 ```text
-Paytm Money
-      |
-      | Fund Transfer
-      v
-    Omne
-      |
-      | 200 OK
-      v
-Paytm Money
+FMS
+  |
+  v
+FO API
+  |
+  v
+Omne API
+  |
+  | 200 OK
+  v
+FMS  → transaction updated
 ```
 
 Everything is fine.
 
-**But sometimes:**
+**What actually happened:** Omne API started failing. **404** came back to **FMS**.
 
 ```text
-Paytm Money
-      |
-      | Fund Transfer
-      v
-    Omne
-      |
-      | 404
-      v
-Paytm Money
+FMS
+  |
+  v
+FO API
+  |
+  v
+Omne API
+  |
+  | 404
+  v
+FMS
 ```
 
-Now what should Paytm Money do?
-
-If you simply say:
+If FMS immediately did:
 
 ```java
 if (response == 404) {
@@ -135,21 +134,21 @@ if (response == 404) {
 }
 ```
 
-you might **incorrectly mark something as failed**.
+it would **incorrectly mark a recoverable transfer as failed**.
 
-**Why?**
-
-Assumption: In this particular integration, some 404 responses represented a **temporary downstream inconsistency** — for example, the resource/state wasn't available yet.
+In this integration, those 404s were often **temporary**. Omne needed time. After waiting and retrying, the same call typically succeeded.
 
 ```text
-404
+404 to FMS
  ↓
-Don't immediately give up
+Don't fail the transaction
  ↓
-Try again later
+Push retry to SQS
+ ↓
+Retry later → often SUCCESS
 ```
 
-That's the fundamental reason for this project.
+That's the reason for this project.
 
 ---
 
@@ -230,99 +229,99 @@ Retry workers
 
 The application doesn't have to retry immediately.
 
-It puts a message into SQS:
+It puts a message into SQS with **transaction ID** and **amount**, and a **1-minute delay**:
 
 ```json
 {
   "transactionId": "TX123",
+  "amount": 5000,
   "retryCount": 1
 }
 ```
 
-Then a worker picks it up later.
+Then a worker picks it up after the delay.
 
 ---
 
 ## 5. Your Complete Architecture
 
-Under our assumption, the architecture would look like:
+This is the architecture:
 
 ```text
                   ┌─────────────────┐
-                  │   Paytm Money   │
-                  │ Fund Transfer   │
-                  │    Service      │
+                  │       FMS       │
+                  │ Fund Management │
                   └────────┬────────┘
                            │
-                           │ API Call
+                           ▼
+                  ┌─────────────────┐
+                  │   FO API        │
+                  │  Front Office   │
+                  └────────┬────────┘
+                           │
+                           │ Omne API
                            ▼
                     ┌─────────────┐
                     │    Omne     │
+                    │  3rd party  │
                     └──────┬──────┘
                            │
                     ┌──────┴──────┐
                     │             │
-                  200            404
+                  200            404 → FMS
                     │             │
                     ▼             ▼
-                Success        Redis
+                Success     Push SQS message
+                            (transactionId, amount)
+                            delay = 1 minute
                                   │
                                   ▼
-                                SQS
+                                Redis
+                         retry delays: 10 min, 15 min
                                   │
                                   ▼
                             Retry Worker
                                   │
                                   ▼
-                                Omne
+                           FO → Omne API
+                                  │
+                                  ▼
+                         typically SUCCESS
+                          (by 15 min retry)
 ```
 
-This is the architecture you should understand.
+SQS holds the retry **work**. Redis holds the retry **delay config**.
 
 ---
 
 ## 6. What Exactly Happens When 404 Occurs?
 
-Let's walk through a real transaction: **TX123**, ₹5,000.
+Walk through **TX123**, ₹5,000.
 
-Paytm Money calls Omne:
+FMS → FO API → Omne API.
 
-```http
-POST /fund-transfer
-```
+Omne returns **404**. That 404 reaches **FMS**.
 
-Omne returns **404 Not Found**.
-
-Your application identifies:
-
-```text
-Is this a retryable 404?
-        |
-       YES
-        |
-        v
-Create retry task
-```
-
-Something conceptually like:
+FMS does **not** fail the transaction. It pushes a retry message to SQS:
 
 ```json
 {
   "transactionId": "TX123",
+  "amount": 5000,
   "retryCount": 1
 }
 ```
 
-Then:
+The SQS send uses a **1-minute delay**. The original FO/FMS request thread does not sit there looping on Omne.
 
 ```text
-Paytm Money
-     |
-     v
-    SQS
+FMS
+ |
+ | 404 from Omne
+ v
+SQS  (DelaySeconds ≈ 60)
+     message = transactionId + amount
 ```
-
-The original request doesn't have to sit there waiting.
 
 ---
 
@@ -332,44 +331,34 @@ This is where your resume says:
 
 > configurable delay intervals using Redis
 
-Suppose you want:
+This is what the system actually used:
 
-| Retry | Delay |
-| --- | --- |
-| Retry #1 | after 30 seconds |
-| Retry #2 | after 2 minutes |
-| Retry #3 | after 5 minutes |
+| Step | Delay | Where |
+| --- | --- | --- |
+| First SQS push | **1 minute** | SQS delay on the message |
+| Next retry | **10 minutes** | Redis config |
+| Next retry | **15 minutes** | Redis config |
+| Typical outcome | **SUCCESS** | Omne had caught up by then |
 
-Instead of hardcoding:
-
-```java
-if (retryCount == 1)
-    delay = 30;
-
-if (retryCount == 2)
-    delay = 120;
-
-if (retryCount == 3)
-    delay = 300;
-```
-
-you could maintain configuration in Redis.
+Instead of hardcoding delays in Java, Redis stored the later intervals:
 
 ```text
 Redis
 
-retry.delay.1 = 30 seconds
-retry.delay.2 = 120 seconds
-retry.delay.3 = 300 seconds
+retry.delay.1 = 1 minute     (SQS delay)
+retry.delay.2 = 10 minutes
+retry.delay.3 = 15 minutes
 ```
 
-Then the application reads the configuration.
+Then the worker reads Redis and applies that delay on the next SQS send.
 
-**Why is this useful?**
+**Why Redis?**
 
-Suppose tomorrow you decide Retry #1 = 60 seconds.
+If ops needed 10 min → 12 min, they could change Redis rather than redeploy FMS.
 
-You can change the configuration rather than changing application code and redeploying.
+**Why wait 10–15 minutes?**
+
+Immediate retry still got 404. Omne needed time. After the 15-minute retry, the same `(transactionId, amount)` call typically succeeded.
 
 ---
 
@@ -411,6 +400,7 @@ It receives:
 ```json
 {
   "transactionId": "TX123",
+  "amount": 5000,
   "retryCount": 1
 }
 ```
@@ -418,9 +408,10 @@ It receives:
 The worker knows:
 
 - Transaction = `TX123`
+- Amount = `5000`
 - Retry count = `1`
 
-It obtains the appropriate retry configuration and eventually calls Omne again.
+It reads Redis delay config and calls Omne again via FO.
 
 ```text
 SQS
@@ -497,7 +488,7 @@ Maximum retries reached
 Stop
 ```
 
-The exact number is not present in your resume, so **don't claim a number** unless you can verify it.
+In this flow the delays you used were **1 minute → 10 minutes → 15 minutes**. After the 15-minute retry, Omne typically returned success. Don't invent a hard max-retry number beyond what you remember; you *can* say the Redis-configured waits were 10 min then 15 min.
 
 ---
 
@@ -533,7 +524,7 @@ wait longer
 retry
 ```
 
-This gives Omne time to recover.
+This matches what you saw: a 1-minute SQS delay was not always enough; Redis then waited **10 minutes**, then **15 minutes**, and Omne usually succeeded on that later attempt.
 
 ---
 
@@ -541,16 +532,17 @@ This gives Omne time to recover.
 
 An interviewer may ask this.
 
-| Strategy | Delays |
+| Strategy | Example |
 | --- | --- |
-| **Fixed delay** | 30 sec, 30 sec, 30 sec |
-| **Exponential backoff** | 30 sec, 60 sec, 120 sec, 240 sec (or some capped variation) |
+| **Fixed delay** | 10 min, 10 min, 10 min |
+| **Increasing configurable delays (this project)** | 1 min → 10 min → 15 min |
+| **Exponential backoff** | 1 min, 2 min, 4 min, 8 min (or some capped variation) |
 
-The idea is: the more times the operation fails, the longer we wait before retrying.
+Your system used **Redis-configured increasing delays**, not a generic "exponential backoff" story unless that is how the numbers were generated.
 
-This prevents excessive pressure on the downstream service.
+What you can say in interview:
 
-**Important:** your resume only says *configurable delay intervals*. Don't tell the interviewer you implemented exponential backoff unless that's actually what the system did.
+> First push to SQS with a 1-minute delay. Redis held later delays — 10 minutes, then 15 minutes. By the 15-minute retry, Omne typically succeeded.
 
 ---
 
@@ -673,12 +665,9 @@ This one is extremely important.
 Imagine:
 
 ```text
-Paytm Money
-      |
-      v
-     Omne
-      |
-      v
+FMS → FO → Omne
+              |
+              v
 Transaction SUCCESS
 ```
 
@@ -693,21 +682,18 @@ Omne → SUCCESS
    Network failure
        |
        v
-Paytm Money doesn't receive response
+FMS doesn't receive response
 ```
 
-Paytm Money thinks: **UNKNOWN**
+FMS thinks: **UNKNOWN**
 
 If you blindly retry:
 
 ```text
-Paytm Money
-     |
-     v
-Omne
+FMS → FO → Omne
 ```
 
-you might execute the transaction **twice**.
+you might execute the transfer **twice**.
 
 Therefore, a robust financial integration needs a stable transaction identifier / idempotency key and safe downstream semantics.
 
@@ -715,23 +701,23 @@ Therefore, a robust financial integration needs a stable transaction identifier 
 
 ## 19. What Does "System Consistency" Mean?
 
-Suppose Omne says `SUCCESS`, but Paytm Money's database says `PENDING`.
+Suppose Omne says `SUCCESS`, but FMS still says `PENDING`.
 
 You have **inconsistent state**.
 
 ```text
-Omne DB              Paytm DB
+Omne                 FMS
 
 SUCCESS              PENDING
    ❌                    ❌
 ```
 
-Your retry/recovery mechanism attempts to bring them back into alignment.
+The SQS retry brings FMS back in line with Omne.
 
 Eventually:
 
 ```text
-Omne DB              Paytm DB
+Omne                 FMS
 
 SUCCESS              SUCCESS
    ✅                    ✅
@@ -983,10 +969,11 @@ public void scheduleRetry(Transaction transaction) {
 
     RetryMessage message = new RetryMessage(
         transaction.getId(),
+        transaction.getAmount(),
         retryCount
     );
 
-    sqs.send(message, config.getDelay());
+    sqs.send(message, config.getDelay());  // first send: 1 minute
 }
 ```
 
@@ -1091,12 +1078,12 @@ Potentially:
 
 ```text
 retry_config
-    attempt1 → 30
-    attempt2 → 120
-    attempt3 → 300
+    attempt1 → 60        (1 minute, SQS delay)
+    attempt2 → 600       (10 minutes)
+    attempt3 → 900       (15 minutes)
 ```
 
-Again, that's an example, not your confirmed schema.
+This matches the Redis config you used. Don't invent extra keys if you don't remember them.
 
 ---
 
@@ -1146,7 +1133,7 @@ That's a strong answer.
 
 ```text
 Omne = SUCCESS
-Paytm DB = PENDING
+FMS  = PENDING
 ```
 
 You need a recovery mechanism.
@@ -1235,31 +1222,27 @@ Your resume also says you worked with Kibana and Rundeck, so these are reasonabl
 Don't memorize 50 different things. Remember this story:
 
 ```text
-1. Paytm Money calls Omne
+1. FMS → FO API → Omne API (third-party)
              ↓
-2. Some requests return 404
+2. Omne starts returning 404 to FMS
              ↓
-3. Some 404s are recoverable
+3. Don't mark the fund transfer FAILED
              ↓
-4. Don't block the API thread
+4. Push SQS message: transactionId + amount
              ↓
-5. Create retry task
+5. SQS delay = 1 minute
              ↓
-6. Put task into SQS
+6. Redis config for later retries = 10 min, then 15 min
              ↓
-7. Redis provides retry configuration/state
+7. Worker consumes SQS, calls Omne again via FO
              ↓
-8. Worker consumes SQS message
+8. Often SUCCESS by the 15-minute retry
              ↓
-9. Worker retries Omne
+9. Update FMS transaction
              ↓
-10. Success → update transaction
+10. If still 404 → next Redis delay, not infinite loop
              ↓
-11. Failure → retry according to policy
-             ↓
-12. Maximum retries → stop/escalate
-             ↓
-13. Idempotency protects against duplicates
+11. Idempotency so duplicate SQS deliveries don't double-post amount
 ```
 
 ---
@@ -1272,17 +1255,11 @@ If they say:
 
 Use this:
 
-> One of the issues we had was with the fund-transfer integration with Omne. In some cases, Omne returned a 404 response for a transaction/resource that could potentially become available later. If we immediately treated that response as a permanent failure, our internal transaction state could become inconsistent with the downstream system.
+> Omne is a third-party vendor. Fund Management System (FMS) calls Front Office (FO) API, which calls Omne's fund-transfer API. Omne started returning 404s, and those 404s were coming to FMS. If we marked the transfer failed immediately, FMS would be wrong because Omne often succeeded a few minutes later.
 >
-> So we implemented an asynchronous retry mechanism using Amazon SQS. When a recoverable 404 occurred, instead of blocking the original request thread and continuously retrying, we created a retry message containing the transaction information and pushed it to SQS.
+> So from FMS we pushed a retry message to Amazon SQS — payload was transaction ID and amount — with a 1-minute delay. Redis held the later retry delays: 10 minutes, then 15 minutes. A worker consumed SQS, called Omne again through FO, and by the 15-minute retry it typically succeeded, then we updated FMS.
 >
-> We used Redis for retry-related configuration/state, including configurable retry delay intervals. This allowed the retry behavior to be controlled without hardcoding all the retry timings into the application.
->
-> A background worker consumed messages from SQS and attempted the operation again after the configured delay. If the retry succeeded, we updated the transaction state. If it failed again, we followed the retry policy rather than retrying indefinitely.
->
-> Another important consideration was duplicate processing because queue systems can deliver a message more than once. Therefore, transaction processing needed to be idempotent so that processing the same transaction multiple times would not result in duplicate business operations.
->
-> The overall goal was to make recoverable transaction updates reliable and prevent transient downstream failures from leaving Paytm Money and Omne in inconsistent states.
+> We didn't block the original API thread retrying Omne in a loop. SQS was the retry queue; Redis was only the delay config. Because SQS can deliver a message more than once, processing had to be idempotent on transaction ID so we wouldn't post the same amount twice.
 
 ---
 
@@ -1292,14 +1269,23 @@ Your bullet is technically impressive, but because you don't remember the implem
 
 For example:
 
-- What was the SQS visibility timeout?
-- What was the maximum retry count?
-- What exact Redis key did you use?
-- Was it Standard or FIFO SQS?
-- How did you guarantee idempotency?
-- What was the message format?
-- What was the Omne API endpoint?
-- What did you do when Redis went down?
+You **can** defend:
+
+- Omne = third-party vendor
+- FMS → FO API → Omne API
+- 404 came to FMS
+- SQS message = `transactionId` + `amount`
+- First delay = **1 minute**
+- Redis later delays = **10 minutes**, then **15 minutes**
+- Typically SUCCESS after the 15-minute retry
+
+Still **don't invent**:
+
+- Exact SQS visibility timeout
+- Exact Redis key name
+- Standard vs FIFO unless you remember
+- Exact Omne URL
+- What happened if Redis was down
 
 If you don't know these, **don't invent answers**.
 
@@ -1310,7 +1296,9 @@ Instead, learn the architecture and be honest about the parts you can defend.
 **Level 1 — MUST KNOW**
 
 - Business problem
-- Omne role
+- Omne = third-party vendor; FMS vs FO
+- Message: transactionId + amount
+- Delays: 1 min SQS, Redis 10 min / 15 min
 - Why 404 needed recovery
 - Why SQS
 - Why Redis
