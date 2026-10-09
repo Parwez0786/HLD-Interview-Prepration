@@ -1,8 +1,42 @@
-Day 1 — HLD Introduction
+# HLD Introduction — Day 1
 
 Since you're preparing for SDE-1 Backend Java interviews, the goal today is to learn a simple framework you can reuse for almost every HLD question.
 
-1. What is HLD?
+---
+
+## Table of Contents
+
+- [1. What is HLD?](#1-what-is-hld)
+- [2. HLD vs LLD](#2-hld-vs-lld)
+- [3. What Happens in an HLD Interview?](#3-what-happens-in-an-hld-interview)
+- [4. Functional Requirements](#4-functional-requirements)
+- [5. Non-Functional Requirements](#5-non-functional-requirements)
+- [6. Scalability](#6-scalability)
+- [7. Availability](#7-availability)
+- [8. Reliability](#8-reliability)
+- [9. Performance](#9-performance)
+- [10. Consistency](#10-consistency)
+- [11. Durability](#11-durability)
+- [12. Maintainability](#12-maintainability)
+- [13. How to Approach ANY HLD Question](#13-how-to-approach-any-hld-question)
+- [14. Requirement Clarification](#14-requirement-clarification)
+- [15. Capacity Estimation](#15-capacity-estimation)
+- [16. Back-of-the-Envelope Calculations](#16-back-of-the-envelope-calculations)
+- [17. Example — Design URL Shortener](#17-example--design-url-shortener)
+- [18. APIs](#18-apis)
+- [19. Database](#19-database)
+- [20. Basic Architecture](#20-basic-architecture)
+- [21. Why Redis?](#21-why-redis)
+- [22. How Do We Generate aB72x?](#22-how-do-we-generate-ab72x)
+- [23. What If Redis Goes Down?](#23-what-if-redis-goes-down)
+- [24. What If Database Goes Down?](#24-what-if-database-goes-down)
+- [25. Interview Cross-Questions](#25-interview-cross-questions)
+- [26. Your HLD Interview Mindset](#26-your-hld-interview-mindset)
+- [What You Should Remember](#day-1--what-you-should-remember)
+
+---
+
+## 1. What is HLD?
 
 HLD = High-Level Design
 
@@ -10,6 +44,7 @@ It describes how different components of a system interact with each other.
 
 For example, in a URL Shortener:
 
+```text
 User
   ↓
 Load Balancer
@@ -19,57 +54,68 @@ URL Service
 Database
   ↓
 Cache
+```
 
 HLD focuses on:
 
-Services
-Databases
-Cache
-Message queues
-APIs
-Load balancers
-Scaling
-Reliability
-Data flow
+- Services
+- Databases
+- Cache
+- Message queues
+- APIs
+- Load balancers
+- Scaling
+- Reliability
+- Data flow
 
 You generally don't start with detailed classes or methods.
 
-2. HLD vs LLD
-HLD	LLD
-System architecture	Class-level design
-Services/components	Classes/interfaces
-Database choice	Tables/entities
-Kafka/Redis/API	Methods/design patterns
-Scalability	Object relationships
-Availability	Encapsulation
-Data flow	SOLID principles
-Simple example
+---
 
-HLD:
+## 2. HLD vs LLD
 
+| HLD | LLD |
+| --- | --- |
+| System architecture | Class-level design |
+| Services/components | Classes/interfaces |
+| Database choice | Tables/entities |
+| Kafka/Redis/API | Methods/design patterns |
+| Scalability | Object relationships |
+| Availability | Encapsulation |
+| Data flow | SOLID principles |
+
+### Simple example
+
+**HLD:**
+
+```text
 Client → Load Balancer → URL Service → Redis → DB
+```
 
-LLD:
+**LLD:**
 
+```java
 class UrlService {
     createShortUrl();
     getOriginalUrl();
 }
+```
 
 Think:
 
-HLD = What components do we need and how do they communicate?
+- **HLD** = What components do we need and how do they communicate?
+- **LLD** = How do we implement those components?
 
-LLD = How do we implement those components?
+---
 
-3. What happens in an HLD interview?
+## 3. What Happens in an HLD Interview?
 
 A typical interview can look like:
 
-Interviewer:
-Design a URL Shortener.
+**Interviewer:** Design a URL Shortener.
 
-You:
+**You:**
+
 1. Clarify requirements
 2. Define functional requirements
 3. Define non-functional requirements
@@ -83,49 +129,56 @@ You:
 
 The interviewer will usually ask follow-ups like:
 
-What if traffic increases 100x?
-What if Redis goes down?
-What if the database goes down?
-How do you generate unique IDs?
-How do you handle duplicate requests?
-How do you maintain availability?
-How do you partition the database?
-4. Functional Requirements
+- What if traffic increases 100x?
+- What if Redis goes down?
+- What if the database goes down?
+- How do you generate unique IDs?
+- How do you handle duplicate requests?
+- How do you maintain availability?
+- How do you partition the database?
+
+---
+
+## 4. Functional Requirements
 
 Functional requirements = What should the system do?
 
 For URL Shortener:
 
-User can create a short URL.
-User can open a short URL.
-System redirects to the original URL.
-Optionally, user can see URL statistics.
+- User can create a short URL.
+- User can open a short URL.
+- System redirects to the original URL.
+- Optionally, user can see URL statistics.
 
 Keep the initial scope limited.
 
 In an interview, say:
 
-"I'll first design the core URL shortening and redirection flow. Analytics and authentication can be added later."
+> I'll first design the core URL shortening and redirection flow. Analytics and authentication can be added later.
 
-5. Non-Functional Requirements
+---
+
+## 5. Non-Functional Requirements
 
 NFR = How well should the system work?
 
 Examples:
 
-High availability
-Low latency
-Scalability
-Reliability
-Durability
-Security
-Maintainability
+- High availability
+- Low latency
+- Scalability
+- Reliability
+- Durability
+- Security
+- Maintainability
 
 For URL Shortener:
 
-"The redirect API should have low latency and the system should support high read traffic."
+> The redirect API should have low latency and the system should support high read traffic.
 
-6. Scalability
+---
+
+## 6. Scalability
 
 Scalability means:
 
@@ -133,32 +186,40 @@ Can the system handle increasing traffic and data?
 
 Suppose:
 
+```text
 1,000 requests/sec
         ↓
 10,000 requests/sec
         ↓
 100,000 requests/sec
+```
 
 We should be able to scale the system.
 
-Horizontal scaling
+### Horizontal scaling
 
 Instead of making one server bigger:
 
+```text
 Server
   ↓
 Bigger Server
+```
 
 Add more servers:
 
+```text
              ┌─ Server 1
 Load Balancer├─ Server 2
              ├─ Server 3
              └─ Server 4
+```
 
 For most web systems, horizontal scaling is important.
 
-7. Availability
+---
+
+## 7. Availability
 
 Availability means:
 
@@ -166,26 +227,30 @@ How often is the system operational and accessible?
 
 Suppose we have:
 
-Server 1
-Server 2
-Server 3
+- Server 1
+- Server 2
+- Server 3
 
 If Server 1 fails:
 
+```text
           Server 1 ❌
 
 Load Balancer
       ↓
 Server 2
 Server 3
+```
 
 The system can continue serving requests.
 
-Key idea
+### Key idea
 
 Avoid a single point of failure.
 
-8. Reliability
+---
+
+## 8. Reliability
 
 Reliability means:
 
@@ -195,46 +260,58 @@ Example:
 
 User creates a URL:
 
+```text
 POST /shorten
+```
 
 The system should not accidentally create five different URLs because the request was retried.
 
 We may use:
 
-Idempotency
-Retries
-Transactions
-Deduplication
-Monitoring
-9. Performance
+- Idempotency
+- Retries
+- Transactions
+- Deduplication
+- Monitoring
+
+---
+
+## 9. Performance
 
 Performance mainly concerns:
 
-Latency
+### Latency
 
 How long one request takes.
 
 Example:
 
+```text
 Request → Server → Response
 
 50 ms
-Throughput
+```
+
+### Throughput
 
 How many requests we can handle.
 
 Example:
 
+```text
 10,000 requests/sec
+```
 
 A system can have:
 
-Low latency but low throughput
-High throughput but higher latency
+- Low latency but low throughput
+- High throughput but higher latency
 
 So always understand the requirement.
 
-10. Consistency
+---
+
+## 10. Consistency
 
 Consistency asks:
 
@@ -242,24 +319,29 @@ When data changes, what should different users/services see?
 
 Suppose:
 
+```text
 Database:
 URL → google.com
+```
 
 User updates it to:
 
+```text
 URL → youtube.com
+```
 
 Should every read immediately return youtube.com?
 
-If yes → stronger consistency.
+- If yes → stronger consistency.
+- If some users temporarily see the old value → eventual consistency may be acceptable.
 
-If some users temporarily see the old value → eventual consistency may be acceptable.
+### Simple interview explanation
 
-Simple interview explanation
+> For critical data where stale reads are not acceptable, I would prefer stronger consistency. For less critical data such as analytics, eventual consistency may be sufficient.
 
-"For critical data where stale reads are not acceptable, I would prefer stronger consistency. For less critical data such as analytics, eventual consistency may be sufficient."
+---
 
-11. Durability
+## 11. Durability
 
 Durability means:
 
@@ -267,6 +349,7 @@ Once data is successfully stored, it should not be lost even after failures.
 
 For example:
 
+```text
 User creates URL
        ↓
 Database stores it
@@ -274,45 +357,53 @@ Database stores it
 Server crashes
        ↓
 URL should still exist
+```
 
 Replication, backups and persistent storage help provide durability.
 
-12. Maintainability
+---
+
+## 12. Maintainability
 
 A system should be easy to:
 
-Understand
-Debug
-Modify
-Test
-Deploy
-Monitor
+- Understand
+- Debug
+- Modify
+- Test
+- Deploy
+- Monitor
 
 For example, instead of one giant service:
 
+```text
 Huge Application
  ├── URL
  ├── Analytics
  ├── User
  ├── Billing
  └── Notifications
+```
 
 we may eventually separate responsibilities:
 
-URL Service
-Analytics Service
-User Service
+- URL Service
+- Analytics Service
+- User Service
 
 But don't create microservices unnecessarily.
 
 That's an important interview point:
 
-"I would start with a simple architecture and introduce additional services when scale or ownership boundaries justify them."
+> I would start with a simple architecture and introduce additional services when scale or ownership boundaries justify them.
 
-13. How to approach ANY HLD question
+---
+
+## 13. How to Approach ANY HLD Question
 
 Remember this sequence:
 
+```text
 1. Requirements
        ↓
 2. Scale estimation
@@ -332,10 +423,13 @@ Remember this sequence:
 9. Bottlenecks
        ↓
 10. Trade-offs
+```
 
 This is your HLD interview template.
 
-14. Requirement Clarification
+---
+
+## 14. Requirement Clarification
 
 Never immediately start drawing boxes.
 
@@ -343,35 +437,37 @@ Ask questions first.
 
 For URL Shortener:
 
-Functional questions
+### Functional questions
 
-"Should users be able to customize the short URL?"
+> Should users be able to customize the short URL?
 
-"Do URLs expire?"
+> Do URLs expire?
 
-"Do we need authentication?"
+> Do we need authentication?
 
-"Do we need analytics?"
+> Do we need analytics?
 
-Scale questions
+### Scale questions
 
-"How many URLs are created per day?"
+> How many URLs are created per day?
 
-"How many redirect requests per second?"
+> How many redirect requests per second?
 
-"What is the expected growth?"
+> What is the expected growth?
 
-Performance questions
+### Performance questions
 
-"What latency is expected for redirects?"
+> What latency is expected for redirects?
 
-Availability questions
+### Availability questions
 
-"Is this system expected to be highly available?"
+> Is this system expected to be highly available?
 
 This shows that you're designing based on requirements rather than guessing.
 
-15. Capacity Estimation
+---
+
+## 15. Capacity Estimation
 
 This is one of the most important HLD skills.
 
@@ -381,34 +477,46 @@ Suppose interviewer says:
 
 Approximate:
 
+```text
 100M / 30 days
 ≈ 3.3M/day
+```
 
 Per second:
 
+```text
 3.3M / 86,400
 ≈ 38 writes/sec
+```
 
 So average write traffic is only around:
 
+```text
 ~40 writes/sec
+```
 
 But suppose every URL gets 100 redirects per month.
 
 Then reads are much higher:
 
+```text
 100M × 100
 = 10B redirects/month
+```
 
 Approximately:
 
+```text
 10B / 30 / 86,400
 ≈ 3,858 reads/sec
+```
 
 So:
 
-Writes ≈ 40/sec
-Reads   ≈ 3,858/sec
+| Traffic | Rate |
+| --- | --- |
+| Writes | ≈ 40/sec |
+| Reads | ≈ 3,858/sec |
 
 That's roughly a 100:1 read/write ratio.
 
@@ -416,33 +524,41 @@ This immediately suggests:
 
 Caching will be very useful.
 
-16. Back-of-the-envelope calculations
+---
+
+## 16. Back-of-the-Envelope Calculations
 
 You don't need perfect numbers.
 
 Use:
 
+```text
 1 day = 86,400 seconds
 ≈ 100,000 seconds
+```
 
 So:
 
+```text
 1 million requests/day
 ≈ 10 requests/sec
+```
 
 This is a very useful interview shortcut.
 
-Storage
+### Storage
 
 Suppose:
 
-100M URLs
-Average record = 500 bytes
+- 100M URLs
+- Average record = 500 bytes
 
 Then:
 
+```text
 100M × 500 bytes
 = 50 GB
+```
 
 Add indexes, replication and metadata:
 
@@ -452,62 +568,94 @@ You don't need to calculate everything precisely.
 
 The goal is to determine:
 
-Is one DB enough?
-Do we need sharding?
-Do we need caching?
-How many servers?
-How much storage?
-17. Example — Design URL Shortener
+- Is one DB enough?
+- Do we need sharding?
+- Do we need caching?
+- How many servers?
+- How much storage?
+
+---
+
+## 17. Example — Design URL Shortener
 
 Now let's put everything together.
 
-Requirements
+### Requirements
 
 Core functionality:
 
+```text
 Original URL
      ↓
 Short URL
+```
 
 Example:
 
+```text
 https://example.com/very/long/path
                  ↓
 https://short.ly/aB72x
+```
 
 When user opens:
 
+```text
 /aB72x
+```
 
 System returns:
 
+```text
 https://example.com/very/long/path
-18. APIs
-Create short URL
+```
+
+---
+
+## 18. APIs
+
+### Create short URL
+
+```http
 POST /urls
+```
 
 Request:
 
+```json
 {
   "longUrl": "https://example.com/very/long/path"
 }
+```
 
 Response:
 
+```json
 {
   "shortUrl": "https://short.ly/aB72x"
 }
-Redirect
+```
+
+### Redirect
+
+```http
 GET /aB72x
+```
 
 Response:
 
+```http
 HTTP 301/302
 Location: https://example.com/very/long/path
-19. Database
+```
+
+---
+
+## 19. Database
 
 Simple table:
 
+```text
 URL
 --------------------------------
 id
@@ -515,17 +663,27 @@ short_code
 long_url
 created_at
 expires_at
+```
 
 Index:
 
+```text
 short_code → long_url
+```
 
 Because the main operation is:
 
+```text
 short_code
      ↓
 long_url
-20. Basic Architecture
+```
+
+---
+
+## 20. Basic Architecture
+
+```text
                  Client
                    |
                    ↓
@@ -542,7 +700,11 @@ long_url
              Cache Miss
                    ↓
                Database
-Redirect flow
+```
+
+### Redirect flow
+
+```text
 GET /aB72x
       ↓
 Load Balancer
@@ -561,56 +723,70 @@ URL         ↓
             Redis
               ↓
            Return URL
+```
 
 This is the basic architecture you should be able to draw in an interview.
 
-21. Why Redis?
+---
+
+## 21. Why Redis?
 
 Because URL shortening is usually read-heavy.
 
 Suppose:
 
+```text
 Redis:
 aB72x → https://example.com/...
+```
 
 Then:
 
+```text
 Request
   ↓
 Redis
   ↓
 URL
+```
 
 We avoid hitting the database for every redirect.
 
 Benefits:
 
-Lower latency
-Lower DB load
-Higher read throughput
-22. How do we generate aB72x?
+- Lower latency
+- Lower DB load
+- Higher read throughput
+
+---
+
+## 22. How Do We Generate aB72x?
 
 One simple approach:
 
+```text
 Generate unique numeric ID
         ↓
 Encode ID using Base62
         ↓
 Short code
+```
 
 Base62 characters:
 
-a-z
-A-Z
-0-9
+- a-z
+- A-Z
+- 0-9
 
 For example:
 
+```text
 ID = 125678
       ↓
 Base62
       ↓
 aB72x
+```
 
 The important requirement is:
 
@@ -618,84 +794,103 @@ The ID must be unique.
 
 Possible ID-generation approaches include:
 
-Database auto-increment
-Distributed ID generator
-Snowflake-style IDs
-Random ID + collision checking
+- Database auto-increment
+- Distributed ID generator
+- Snowflake-style IDs
+- Random ID + collision checking
 
 For a simple initial design, we can start with a database-generated ID.
 
-23. What if Redis goes down?
+---
+
+## 23. What If Redis Goes Down?
 
 Don't make Redis the only source of truth.
 
+```text
 Redis ❌
   ↓
 Database
   ↓
 Return URL
+```
 
 After retrieving the URL:
 
+```text
 Database
    ↓
 Redis
+```
 
 Populate the cache again.
 
 Therefore:
 
-Database = durable source of truth
-Redis    = cache
-24. What if database goes down?
+| Layer | Role |
+| --- | --- |
+| Database | Durable source of truth |
+| Redis | Cache |
+
+---
+
+## 24. What If Database Goes Down?
 
 For high availability, we can use:
 
+```text
 Primary DB
     ↓
 Replicas
+```
 
 For writes:
 
+```text
 Application → Primary
+```
 
 For reads:
 
+```text
 Application → Replica
+```
 
 But we need to think about replication lag and consistency requirements.
 
 At larger scale, database sharding can also be considered.
 
-25. Interview Cross-Questions
+---
+
+## 25. Interview Cross-Questions
 
 Be ready for these:
 
-Q: Why cache?
+### Q: Why cache?
 
 Because redirects are read-heavy. Caching frequently accessed short codes reduces database load and latency.
 
-Q: What happens when cache misses?
+### Q: What happens when cache misses?
 
 Read from the database, return the result, and populate Redis.
 
-Q: What happens when Redis fails?
+### Q: What happens when Redis fails?
 
 Fall back to the database. Redis is a cache, not the source of truth.
 
-Q: How do you generate unique short codes?
+### Q: How do you generate unique short codes?
 
 Generate a unique ID and encode it using Base62, or use another distributed ID-generation mechanism.
 
-Q: How do you scale the application?
+### Q: How do you scale the application?
 
 Keep the URL service stateless and horizontally scale multiple instances behind a load balancer.
 
-Q: How do you handle database scaling?
+### Q: How do you handle database scaling?
 
 Start with replication for read scaling. If the dataset/write load becomes sufficiently large, consider partitioning/sharding.
 
-Q: What is the biggest bottleneck?
+### Q: What is the biggest bottleneck?
 
 Initially:
 
@@ -703,25 +898,31 @@ Database reads
 
 So:
 
+```text
 Redis
  ↓
 Reduce DB reads
+```
 
 At much larger scale, other bottlenecks could appear:
 
-DB writes
-ID generation
-Network
-Cache capacity
-Hot keys
-26. Your HLD Interview Mindset
+- DB writes
+- ID generation
+- Network
+- Cache capacity
+- Hot keys
+
+---
+
+## 26. Your HLD Interview Mindset
 
 Don't try to immediately say:
 
-"I'll use Kafka, Redis, Kubernetes, MongoDB, microservices..."
+> I'll use Kafka, Redis, Kubernetes, MongoDB, microservices...
 
 Instead ask:
 
+```text
 What does the system need?
         ↓
 How much traffic?
@@ -729,10 +930,13 @@ How much traffic?
 What are the bottlenecks?
         ↓
 What solution solves those bottlenecks?
+```
 
 Architecture should come from requirements.
 
-Day 1 — What you should remember
+---
+
+## Day 1 — What You Should Remember
 
 If the interviewer gives you any HLD problem, start with:
 
@@ -751,12 +955,14 @@ If the interviewer gives you any HLD problem, start with:
 
 And remember these definitions:
 
-Scalability  → Handle more load
-Availability → System remains accessible
-Reliability  → System behaves correctly despite failures
-Performance  → Latency + throughput
-Consistency   → What data different readers see
-Durability    → Data survives failures
-Maintainability → Easy to change/debug
+| Concept | Meaning |
+| --- | --- |
+| Scalability | Handle more load |
+| Availability | System remains accessible |
+| Reliability | System behaves correctly despite failures |
+| Performance | Latency + throughput |
+| Consistency | What data different readers see |
+| Durability | Data survives failures |
+| Maintainability | Easy to change/debug |
 
 For Day 1, don't worry about designing a perfect system. Your main goal is to build the habit of going from requirements → estimation → architecture → bottlenecks → trade-offs.
